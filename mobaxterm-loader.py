@@ -122,27 +122,31 @@ def generate_license(lic_type, user_name, count, major, minor):
 # ==========================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="Download latest MobaXterm Portable + generate & embed license (Custom.mxtpro)"
+        description="Download MobaXterm (Portable/Installer, stable or preview) + generate & embed license"
     )
     parser.add_argument("license_type", nargs='?', default="Educational",
                         help="Professional | Educational | Personal (default: Educational)")
     parser.add_argument("user_name",   nargs='?', default="Majin Buu",
                         help="User name / license owner (default: Majin Buu)")
     parser.add_argument("version",     nargs='?', default="25.4",
-                        help="Version <major>.<minor> (default: 25.4)")
+                        help="Version <major>.<minor> (default: 25.4 – used for license only)")
     parser.add_argument("count",       nargs='?', type=int, default=2,
                         help="Number of supported users (default: 2)")
     parser.add_argument("--output-base-dir", default=".",
                         help="Directory for download and extraction (default: current)")
     parser.add_argument("--keep-pro-key", action="store_true",
                         help="Keep temporary Pro.key file after creating Custom.mxtpro")
+    parser.add_argument("--installer", action="store_true",
+                        help="Download the Installer edition instead of Portable")
+    parser.add_argument("--preview", action="store_true",
+                        help="Download from preview channel (latest preview build) instead of stable")
 
     args = parser.parse_args()
 
     if args.count > 9999:
         print("⚠️  Warning: count > 9999 – MobaXterm may ignore or clip the value", file=sys.stderr)
 
-    # Validate version
+    # Validate version (used for license generation, not download detection)
     if "." not in args.version:
         print("❌ Version must be <major>.<minor>", file=sys.stderr)
         sys.exit(1)
@@ -160,39 +164,62 @@ def main():
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
 
-    URL = "https://mobaxterm.mobatek.net/download-home-edition.html"
+    if args.preview:
+        URL = "https://mobaxterm.mobatek.net/preview.html"
+        channel = "Preview"
+    else:
+        URL = "https://mobaxterm.mobatek.net/download-home-edition.html"
+        channel = "Stable"
+
+    edition = "Installer" if args.installer else "Portable"
+    print(f"🌐 Fetching MobaXterm {channel} page... (looking for {edition} edition)")
+
     HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    print("🌐 Fetching MobaXterm download page...")
     try:
         response = requests.get(URL, headers=HEADERS, timeout=15)
         response.raise_for_status()
     except Exception as e:
-        print(f"❌ Failed to fetch download page: {e}", file=sys.stderr)
+        print(f"❌ Failed to fetch {channel} page: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print("🔎 Looking for latest Portable ZIP...")
-    match = re.search(r'href="([^"]*MobaXterm_Portable_v[\d.]+(?:_Preview\d+)?\.zip)"',
-                      response.text, re.IGNORECASE)
-    if not match:
-        print("❌ Could not find Portable ZIP link. Page format may have changed.", file=sys.stderr)
+    print("🔎 Looking for latest ZIP...")
+    # Regex matches both Portable/Installer and handles _PreviewN
+    matches = re.findall(r'href="([^"]*MobaXterm_(Portable|Installer)_v[\d.]+(?:_Preview\d+)?\.zip)"',
+                         response.text, re.IGNORECASE)
+
+    if not matches:
+        print(f"❌ No MobaXterm ZIP links found on {channel} page.", file=sys.stderr)
         print(f"   → Check manually: {URL}")
         sys.exit(1)
 
-    download_url = urljoin(URL, match.group(1))
-    zip_filename = os.path.basename(download_url)
-    print(f"📦 Found: {zip_filename}")
-    print(f"    URL:  {download_url}")
+    # Pick the correct edition
+    selected_url = None
+    selected_filename = None
+    target_edition = "Installer" if args.installer else "Portable"
+
+    for href, ed in matches:
+        if ed.lower() == target_edition.lower():
+            selected_url = urljoin(URL, href)
+            selected_filename = os.path.basename(href)
+            break
+
+    if not selected_url:
+        print(f"❌ Could not find {target_edition} ZIP on {channel} page.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"📦 Found {channel} {target_edition}: {selected_filename}")
+    print(f"    URL:  {selected_url}")
 
     base_dir    = args.output_base_dir
-    zip_path    = os.path.join(base_dir, zip_filename)
-    extract_dir = os.path.join(base_dir, os.path.splitext(zip_filename)[0])
+    zip_path    = os.path.join(base_dir, selected_filename)
+    extract_dir = os.path.join(base_dir, os.path.splitext(selected_filename)[0])
 
-    # Download (skip if ZIP already exists)
+    # Download (skip if exists)
     if not os.path.isfile(zip_path):
         print("⬇️ Downloading...")
         try:
-            with requests.get(download_url, headers=HEADERS, stream=True, timeout=60) as r:
+            with requests.get(selected_url, headers=HEADERS, stream=True, timeout=60) as r:
                 r.raise_for_status()
                 total_size = int(r.headers.get("Content-Length", 0))
                 with open(zip_path, "wb") as f, tqdm(
@@ -210,7 +237,7 @@ def main():
     else:
         print(f"✓ ZIP already exists: {zip_path} → skipping download")
 
-    # Check for existing extraction + license
+    # Check if already extracted + licensed
     moba_exe_found = False
     exe_name = None
     license_already_present = os.path.isfile(os.path.join(extract_dir, "Custom.mxtpro"))
@@ -225,7 +252,7 @@ def main():
     if moba_exe_found:
         if license_already_present:
             print(f"✓ Folder already looks complete: contains {exe_name} + Custom.mxtpro")
-            print(f"   → Regenerating license anyway (you can cancel with Ctrl+C if not needed)")
+            print(f"   → Regenerating license anyway (Ctrl+C to cancel if not needed)")
         else:
             print(f"✓ Found {exe_name} but no Custom.mxtpro yet → generating license")
     else:
@@ -239,13 +266,12 @@ def main():
             print(f"❌ Extraction failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Generate license (always do this step unless you add --skip-license flag later)
+    # Generate & embed license
     license_key = generate_license(lic_type, args.user_name, args.count, major, minor)
     print(f"\n🔑 Generated {LICENSE_TYPE_NAMES[lic_type]} license key:")
     print(license_key)
     print("")
 
-    # Place / update license files
     key_path    = os.path.join(extract_dir, "Pro.key")
     mxtpro_path = os.path.join(extract_dir, "Custom.mxtpro")
 
@@ -257,7 +283,7 @@ def main():
             zf.write(key_path, arcname="Pro.key")
 
         print(f"✓ Created / Updated: {mxtpro_path}")
-        print(f"   → Placed in portable root: {extract_dir}")
+        print(f"   → Placed in extracted root: {extract_dir}")
 
         if not args.keep_pro_key:
             try:
