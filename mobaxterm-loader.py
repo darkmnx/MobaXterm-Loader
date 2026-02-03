@@ -6,7 +6,6 @@ import re
 import zipfile
 import os
 from urllib.parse import urljoin
-from tqdm import tqdm
 
 # ==========================================================
 # Variant Base64 tables (custom, NOT RFC-4648)
@@ -221,15 +220,10 @@ def main():
         try:
             with requests.get(selected_url, headers=HEADERS, stream=True, timeout=60) as r:
                 r.raise_for_status()
-                total_size = int(r.headers.get("Content-Length", 0))
-                with open(zip_path, "wb") as f, tqdm(
-                    total=total_size, unit="B", unit_scale=True, unit_divisor=1024,
-                    desc="Download"
-                ) as pbar:
+                with open(zip_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=16384):
                         if chunk:
                             f.write(chunk)
-                            pbar.update(len(chunk))
         except Exception as e:
             print(f"❌ Download failed: {e}", file=sys.stderr)
             sys.exit(1)
@@ -268,8 +262,12 @@ def main():
 
     # Generate & embed license
     license_key = generate_license(lic_type, args.user_name, args.count, major, minor)
-    print(f"\n🔑 Generated {LICENSE_TYPE_NAMES[lic_type]} license key:")
-    print(license_key)
+    print(f"\n🔑 Generated {LICENSE_TYPE_NAMES[lic_type]} license:")
+    print("")
+    print("   Key      :", license_key)
+    print("   User     :", args.user_name)
+    print("   Version  :", args.version)
+    print("   Users    :", args.count)
     print("")
 
     key_path    = os.path.join(extract_dir, "Pro.key")
